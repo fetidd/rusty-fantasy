@@ -1,0 +1,12 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "*", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+serde = { version = "*", features = ["derive"] }
+serde_json = { version = "*", features = [] }
+futures-util = { version = "*", features = [] }
+tower-http = { version = "*", features = ["cors"] }
