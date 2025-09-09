@@ -1,11 +1,9 @@
 [workspace]
 members = [
-    "client",
+    "client", "shared",
     "server",
 ]
 resolver = "3"
-
-[profile]
 
 [profile.wasm-dev]
 inherits = "dev"

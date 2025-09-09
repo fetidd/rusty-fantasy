@@ -1,103 +1,69 @@
+mod components;
+
 use dioxus::prelude::*;
+
 use futures::{SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
 
+use shared::messaging::{SystemResponse, SystemRequest};
+
 fn main() {
-    launch(App);
+    launch(|| {
+        tracing::info!("Starting Client");
+        let (ws_coroutine, message_list) = set_up_socket();
+        let _ = use_context_provider(|| ClientState {
+            messages: message_list,
+            ws_coroutine: ws_coroutine.into(),
+            username: use_signal(|| String::new()),
+        }); // can this just be global state?
+        rsx! { components::client::Client {} }
+    });
 }
 
-#[component]
-fn App() -> Element {
-    rsx! {
-        document::Stylesheet { href: asset!("assets/styles/app.css") }
-        Home {}
+#[derive(Clone)]
+struct ClientState {
+    ws_coroutine: Coroutine<SystemRequest>,
+    messages: Signal<Vec<SystemResponse>>,
+    username: Signal<String>,
+}
+
+impl ClientState {
+    fn send<M: Into<SystemRequest>>(&self, msg: M) {
+        self.ws_coroutine.send(msg.into());
+    }
+
+    fn get_messages(&self) -> Vec<SystemResponse> {
+        self.messages.read().to_vec()
     }
 }
 
-#[component]
-fn Home() -> Element {
-    let mut message_list: Signal<Vec<String>> = use_signal(|| vec![]);
-    let mut message_content = use_signal(|| String::new());
-    let mut receiver_ws = use_signal(|| None);
-    let mut name = use_signal(|| String::new());
-    let mut has_name = use_signal(|| false);
-
-    let chat_client = use_coroutine(move |mut rx: UnboundedReceiver<String>| async move {
-        let (mut sender, receiver) = WebSocket::open("ws://localhost:3000/message").unwrap().split();
-        receiver_ws.set(Some(receiver));
-        while let Some(msg) = rx.next().await {
-            let message = format!("{}: {}", name, msg);
-            sender.send(Message::Text(message)).await.unwrap();
+fn set_up_socket() -> (Coroutine<SystemRequest>, Signal<Vec<SystemResponse>>) {
+    tracing::info!("Creating WebSocket connection...");
+    let mut receiver_ws = use_signal(|| None); // will receive the websocket responses
+    let ws_client = use_coroutine(move |mut rx: UnboundedReceiver<SystemRequest>| async move { // will send websocket requests received from the client into this coroutine
+        let (mut sender, receiver) = WebSocket::open("ws://localhost:3000/message").unwrap().split(); //  split the websocket into a sender and receiver
+        receiver_ws.set(Some(receiver)); // store the receiver in a signal so it can be used in another coroutine
+        while let Some(msg) = rx.next().await { // wait for messages from the client
+            tracing::debug!("Sending message: {:?}", msg);
+            sender.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.unwrap(); // send the message to the server
         }
     });
-
-    let _ = use_future(move || async move {
-        if let Some(mut receiver) = receiver_ws.take() {
-            while let Some(msg) = receiver.next().await {
-                if let Ok(msg) = msg {
-                    match msg {
-                        Message::Text(content) => {
-                            message_list.write().push(content);
+    let mut message_list: Signal<Vec<SystemResponse>> = use_signal(|| vec![]); // will store the list of messages received from the server
+    let _ = use_future(move || async move { // coroutine to handle incoming websocket messages
+        if let Some(mut receiver) = receiver_ws.take() { // get the receiver from the signal
+            while let Some(msg) = receiver.next().await { // wait for messages from the server
+                if let Ok(msg) = msg { // if the message is valid
+                    match msg { // match on the message type
+                        Message::Text(content) => { // if it's a text message
+                            let msg = serde_json::from_str(&content).unwrap();
+                            tracing::debug!("Received message: {:?}", msg);
+                            message_list.write().push(msg);
                         },
-                        _ => ()
+                        _ => () // ignore other message types
                     }
                 }
             }
         }
     });
-    rsx! {
-        if !has_name() {
-            div {
-                class: "chat-container",
-                div {
-                    class: "chat input-name",
-                    input {
-                        r#type: "text",
-                        placeholder: "Enter your name",
-                        value: "{name}",
-                        oninput: move |e| name.set(e.value()),
-                    }
-                    button {
-                        onclick: move |_| has_name.set(true),
-                        disabled: if name().trim() == "" {true},
-                        "Join chat"
-                    }
-                }
-            }
-        } else {
-            div { class: "chat-container",
-                div { class: "chat",
-                    div { class: "message-container",
-                        {
-                            message_list()
-                                .iter()
-                                .rev()
-                                .map(|item| {
-                                    let username = item.split(":").collect::<Vec<&str>>()[0];
-                                    rsx! {
-                                        p { class: "message-item", class: if username == name() { "user-message" }, "{item}" }
-                                    }
-                                })
-                        }
-                    }
-                    div { class: "input-container",
-                        input {
-                            r#type: "text",
-                            value: message_content,
-                            placeholder: name,
-                            oninput: move |e| message_content.set(e.value()),
-                        }
-                        button {
-                            onclick: move |_| {
-                                chat_client.send(message_content());
-                                message_content.set(String::new());
-                            },
-                            disabled: if message_content().trim() == "" { true },
-                            "Send"
-                        }
-                    }
-                }
-            }
-        }
-    }
+    (ws_client, message_list)
 }
