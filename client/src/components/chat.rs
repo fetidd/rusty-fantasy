@@ -1,38 +1,47 @@
 use dioxus::prelude::*;
-use shared::messaging::{SystemRequest, SystemResponse};
+use shared::messaging::{SystemRequest, SystemResponse, TagMap};
 
 use crate::ClientState;
 
 #[component]
 pub fn Chat() -> Element {
     let client = use_context::<ClientState>();
+    let ws = use_context::<Coroutine<SystemRequest>>();
+    let username = client.username.read().clone();
+    let messages: Vec<_> = client.get_messages();
+    let messages: Vec<_> = messages
+        .iter()
+        .rev()
+        .filter(|item| matches!(item, SystemResponse::Chat {..} | SystemResponse::Roll {..}))
+        .collect();
+
     let mut message_content = use_signal(|| String::new());
+    let send_request = move |msg: SystemRequest| {
+        ws.send(msg);
+    };
     
     rsx! {
         div { class: "chat-container",
             div { class: "chat",
                 div { 
                     class: "message-container",
-                    {
-                        client.get_messages()
-                        .iter()
-                        .rev()
-                        .filter_map(|item| {
-                            if let SystemResponse::Chat { username, role: _, content } = item {
-                                let display_name = if *username == *client.username.read() { "You" } else { username };
-                                Some(rsx! {
-                                    p { class: "message-item chat", "{display_name}: {content}" }
-                                })
-                            } else if let SystemResponse::Roll { dice_values: (d1, d2), username, tags: _ } = item {
-                                let display_name = if *username == *client.username.read() { "You" } else { username };
-                                Some(rsx! {
-                                    p { class: "message-item roll", "{display_name} rolled a {d1 + d2}" }
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                    }
+                    {messages.iter().map(|msg| rsx! {
+                        match msg {
+                            SystemResponse::Chat {username, role, content} => rsx! {
+                                div { class: "message",
+                                    b { "{username} ({role}): " }
+                                    span { "{content}" }
+                                }
+                            },
+                            SystemResponse::Roll {dice_values: (d1, d2), username, tags, total} => rsx! {
+                                div { class: "message roll",
+                                    b { "{username} rolled: " }
+                                    span { "({d1}, {d2}) + tags = {total}" }
+                                }
+                            },
+                            _ => rsx! {}
+                        }
+                    }) }
                 }
             }
             div { class: "input-container",
@@ -43,12 +52,20 @@ pub fn Chat() -> Element {
                 }
                 button {
                     onclick: move |_| {
-                        let msg = SystemRequest::Chat { username: client.username.read().clone(), role: "player".into(), content: message_content().clone() };
-                        client.send(msg);
+                        let msg = SystemRequest::Chat { username: username.clone(), role: "player".into(), content: message_content().clone() };
+                        send_request(msg);
                         message_content.set(String::new());
                     },
                     disabled: if message_content().trim() == "" { true },
                     "Send"
+                }
+                button {
+                    onclick: move |_| {
+                        let msg = SystemRequest::Roll { username: "derp".into(), tags: TagMap::default() };
+                        send_request(msg);
+                        message_content.set(String::new());
+                    },
+                    "Roll"
                 }
             }
         }

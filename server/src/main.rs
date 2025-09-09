@@ -61,7 +61,19 @@ async fn handle_socket(socket: WebSocket, tx: Sender<SystemResponse>) {
                                 role
                             };
                             tx.send(response).unwrap();
-                        }
+                        },
+                        SystemRequest::Roll { username, tags } => {
+                            let roll = (rand::random::<u8>() % 6 + 1, rand::random::<u8>() % 6 + 1);
+                            let roll_total = roll.0 + roll.1;
+                            let total = apply_tags_to_roll(roll_total, &tags);
+                            let response = SystemResponse::Roll {
+                                dice_values: roll,
+                                username,
+                                tags,
+                                total
+                            };
+                            tx.send(response).unwrap();
+                        },
                         _ => (),
                     }
                 },
@@ -70,4 +82,8 @@ async fn handle_socket(socket: WebSocket, tx: Sender<SystemResponse>) {
             }
         }
     }
+}
+
+fn apply_tags_to_roll(roll_total: u8, tags: &shared::messaging::TagMap) -> u8 {
+    roll_total + 3 // placeholder implementation
 }

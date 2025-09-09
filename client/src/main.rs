@@ -11,27 +11,23 @@ fn main() {
     launch(|| {
         tracing::info!("Starting Client");
         let (ws_coroutine, message_list) = set_up_socket();
-        let _ = use_context_provider(|| ClientState {
+        let client_state = ClientState {
             messages: message_list,
-            ws_coroutine: ws_coroutine.into(),
             username: use_signal(|| String::new()),
-        }); // can this just be global state?
+        };
+        let _ = use_context_provider(|| ws_coroutine);
+        let _ = use_context_provider(|| client_state); // can this just be global state?
         rsx! { components::client::Client {} }
     });
 }
 
 #[derive(Clone)]
 struct ClientState {
-    ws_coroutine: Coroutine<SystemRequest>,
     messages: Signal<Vec<SystemResponse>>,
     username: Signal<String>,
 }
 
 impl ClientState {
-    fn send<M: Into<SystemRequest>>(&self, msg: M) {
-        self.ws_coroutine.send(msg.into());
-    }
-
     fn get_messages(&self) -> Vec<SystemResponse> {
         self.messages.read().to_vec()
     }
