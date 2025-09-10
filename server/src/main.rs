@@ -1,7 +1,16 @@
-use axum::{extract::{ws::{Message, WebSocket}, State, WebSocketUpgrade}, http::HeaderValue, response::IntoResponse, routing::get, Router};
+use axum::{
+    Router,
+    extract::{
+        State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
+    http::HeaderValue,
+    response::IntoResponse,
+    routing::get,
+};
 use futures_util::{SinkExt, StreamExt};
-use shared::messaging::{SystemRequest, SystemResponse};
-use tokio::sync::broadcast::{channel, Receiver, Sender};
+use shared::{messaging::{SystemRequest, SystemResponse}, modifier::{ModifierMap, Polarity}};
+use tokio::sync::broadcast::{Receiver, Sender, channel};
 use tower_http::cors::{Any, CorsLayer};
 
 #[tokio::main]
@@ -14,12 +23,8 @@ async fn main() {
 }
 
 fn app(tx: Sender<SystemResponse>) -> Router {
-    let origins = vec![
-        "http://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
-    ];
-    let cors_layer = CorsLayer::new()
-        .allow_origin(origins)
-        .allow_methods(Any);
+    let origins = vec!["http://127.0.0.1:8080".parse::<HeaderValue>().unwrap()];
+    let cors_layer = CorsLayer::new().allow_origin(origins).allow_methods(Any);
 
     Router::new()
         .route("/", get(|| async { "Hello, World!" }))
@@ -43,7 +48,10 @@ async fn handle_socket(socket: WebSocket, tx: Sender<SystemResponse>) {
     tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
             tracing::info!("Sending message: {:?}", msg);
-            sender.send(Message::from(serde_json::to_string(&msg).unwrap())).await.unwrap();
+            sender
+                .send(Message::from(serde_json::to_string(&msg).unwrap()))
+                .await
+                .unwrap();
         }
     });
 
@@ -54,36 +62,49 @@ async fn handle_socket(socket: WebSocket, tx: Sender<SystemResponse>) {
                     let msg: SystemRequest = serde_json::from_str(&content).unwrap();
                     tracing::info!("Received message: {:?}", msg);
                     match msg {
-                        SystemRequest::Chat { username, content, role } => {
+                        SystemRequest::Chat {
+                            username,
+                            content,
+                            role,
+                        } => {
                             let response = SystemResponse::Chat {
                                 username,
                                 content,
-                                role
+                                role,
                             };
                             tx.send(response).unwrap();
-                        },
-                        SystemRequest::Roll { username, tags } => {
-                            let roll = (rand::random::<u8>() % 6 + 1, rand::random::<u8>() % 6 + 1);
+                        }
+                        SystemRequest::Roll { username, modifiers } => {
+                            let roll = (
+                                (rand::random::<u8>() % 6 + 1) as i8,
+                                (rand::random::<u8>() % 6 + 1) as i8,
+                            );
                             let roll_total = roll.0 + roll.1;
-                            let total = apply_tags_to_roll(roll_total, &tags);
+                            let total = apply_mods_to_roll(roll_total, &modifiers);
                             let response = SystemResponse::Roll {
                                 dice_values: roll,
                                 username,
-                                tags,
-                                total
+                                modifiers,
+                                total,
                             };
                             tx.send(response).unwrap();
-                        },
+                        }
                         _ => (),
                     }
-                },
+                }
                 Message::Close(_) => break,
-                _ => ()
+                _ => (),
             }
         }
     }
 }
 
-fn apply_tags_to_roll(roll_total: u8, tags: &shared::messaging::TagMap) -> u8 {
-    roll_total + 3 // placeholder implementation
+fn apply_mods_to_roll(mut roll_total: i8, mods: &ModifierMap) -> i8 {
+    for (modifier, polarity, is_burned) in mods.get_modifiers() {
+        match polarity {
+            Polarity::Positive => roll_total += (if is_burned { modifier.get_value() * 3 } else { modifier.get_value() }) as i8, // TODO make sure only power/story tags can be burned
+            Polarity::Negative => roll_total -= modifier.get_value() as i8,
+        }
+    }
+    roll_total
 }

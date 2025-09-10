@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use shared::messaging::{SystemRequest, SystemResponse, TagMap};
+use shared::{messaging::{SystemRequest, SystemResponse}};
 
 use crate::ClientState;
 
@@ -9,15 +9,30 @@ pub fn Chat() -> Element {
     let ws = use_context::<Coroutine<SystemRequest>>();
     let username = client.username.read().clone();
     let messages: Vec<_> = client.get_messages();
-    let messages: Vec<_> = messages
+    let messages: Vec<_> = messages // only show chat and roll messages
         .iter()
         .rev()
         .filter(|item| matches!(item, SystemResponse::Chat {..} | SystemResponse::Roll {..}))
         .collect();
 
     let mut message_content = use_signal(|| String::new());
-    let send_request = move |msg: SystemRequest| {
-        ws.send(msg);
+
+    let send_chat_message = { // send a chat message to the server
+        let message_content = message_content.clone();
+        let username = username.clone();
+        move || {
+            let msg = SystemRequest::Chat { username: username.clone(), role: "player".into(), content: message_content().clone() };
+            ws.send(msg);
+        }
+    };
+
+    let send_roll = { // send a roll request to the server
+        let username = username.clone();
+        let modifiers = client.current_modifiers.read().clone();
+        move |_| {
+            let msg = SystemRequest::Roll { username: username.clone(), modifiers: modifiers.clone() };
+            ws.send(msg);
+        }
     };
     
     rsx! {
@@ -33,10 +48,14 @@ pub fn Chat() -> Element {
                                     span { "{content}" }
                                 }
                             },
-                            SystemResponse::Roll {dice_values: (d1, d2), username, tags, total} => rsx! {
-                                div { class: "message roll",
-                                    b { "{username} rolled: " }
-                                    span { "({d1}, {d2}) + tags = {total}" }
+                            SystemResponse::Roll {dice_values: (d1, d2), username, modifiers, total} => {
+                                let modifiers = modifiers.to_string();
+                                let content = if modifiers.is_empty() { format!("({d1}, {d2}) = {total}") } else { format!("({d1}, {d2}) ({modifiers}) = {total}") };
+                                rsx! {
+                                    div { class: "message roll",
+                                        b { "{username} rolled: " }
+                                        span { "{content}" }
+                                    }
                                 }
                             },
                             _ => rsx! {}
@@ -52,21 +71,13 @@ pub fn Chat() -> Element {
                 }
                 button {
                     onclick: move |_| {
-                        let msg = SystemRequest::Chat { username: username.clone(), role: "player".into(), content: message_content().clone() };
-                        send_request(msg);
+                        send_chat_message();
                         message_content.set(String::new());
                     },
                     disabled: if message_content().trim() == "" { true },
                     "Send"
                 }
-                button {
-                    onclick: move |_| {
-                        let msg = SystemRequest::Roll { username: "derp".into(), tags: TagMap::default() };
-                        send_request(msg);
-                        message_content.set(String::new());
-                    },
-                    "Roll"
-                }
+                button { onclick: send_roll, "Roll" }
             }
         }
     }

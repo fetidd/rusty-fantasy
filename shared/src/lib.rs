@@ -1,7 +1,11 @@
 pub mod hero;
 pub mod challenge;
 pub mod tag;
-pub mod status;
 pub mod messaging;
 pub mod fellowship;
 pub mod player;
+pub mod limit;
+pub mod scene;
+pub mod might;
+pub mod modifier;
+pub mod theme;
